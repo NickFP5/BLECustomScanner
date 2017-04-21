@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanRecord;
 import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -29,6 +30,8 @@ import android.widget.TextView;
 import java.util.Iterator;
 import java.util.Map;
 
+import static java.lang.Integer.MIN_VALUE;
+
 public class MainActivity extends AppCompatActivity {
 
     BluetoothManager btManager;
@@ -39,6 +42,8 @@ public class MainActivity extends AppCompatActivity {
     TextView peripheralTextView;
     private final static int REQUEST_ENABLE_BT = 1;
     private static final int PERMISSION_REQUEST_COARSE_LOCATION = 1;
+
+    private static long lastTS = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,13 +103,107 @@ public class MainActivity extends AppCompatActivity {
 
     // Device scan callback.
     private ScanCallback leScanCallback = new ScanCallback() {
+
+
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            String s= byteArrayToHex(result.getScanRecord().getBytes());
+
+            String devName, devAddr, rawBytesString, appData;
+            int rssi, txPower, advFlags;
+            long ts, tsDiff = 0;
+            BluetoothDevice btDev;
+            ScanRecord sr;
+            byte[] rawBytes;
+
+            boolean service_data_rcvd = false;
+
+            sr = result.getScanRecord();
+
+            btDev = result.getDevice();
+            rssi = result.getRssi();
+
+            if(btDev != null){
+                devAddr = btDev.getAddress();
+                devName = btDev.getName();
+            }
+            else{
+                devAddr = null;
+                devName = null;
+            }
+
+
+            txPower = sr.getTxPowerLevel();
+            rawBytes = sr.getBytes();
+            advFlags = sr.getAdvertiseFlags();
+
+            int field_len, type, i, j;
+            byte[] rawValue;
+            i = 0;
+            rawBytesString = "";
+            appData = "";
+
+
+            //environmental sensor demo variables
             float temp=0;
             float press=0;
             int raw_temp=0;
             int raw_press=0;
+
+
+
+
+
+            while(i < rawBytes.length){
+                field_len = rawBytes[i];
+                type = rawBytes[i+1];
+
+                if(type == 0x16){ //AD_TYPE_SERVICE_DATA
+                    rawValue = new byte[field_len-1];
+                    for(j = 0; j < field_len-1; j++){
+                        rawValue[j] = rawBytes[i+2+j];
+                    }
+
+                    rawBytesString = rawBytesString + "\n" + byteArrayToHex(rawValue);
+
+                    if(rawValue[0] == 0x00 && rawValue[1] == 0x01){ //app temperature and pressure sensor beacon demo
+                        raw_temp = 0x000000ff & rawValue[3];
+                        raw_temp = (raw_temp << 8) | (0x000000ff & rawValue[2]);
+                        temp = (float) raw_temp / 10;
+                        raw_press = 0x000000ff & rawValue[6];
+                        raw_press = raw_press << 8 | (0x000000ff & rawValue[5]);
+                        raw_press = raw_press << 8 | (0x000000ff & rawValue[4]);
+                        press = (float) raw_press / 100;
+                        appData = "\n\tTemperature: " + temp + " °C \n\tPressure: " + press + " mbr";
+                    }
+
+                    //ts = result.getTimestampNanos();
+                    ts = System.currentTimeMillis();
+                    if(lastTS == 0) tsDiff = 0;
+                    else tsDiff = (ts - lastTS);
+                    //else tsDiff = (ts - lastTS)/1000000;
+                    lastTS = ts;
+
+                    service_data_rcvd = true;
+                    break;
+                }
+
+
+                i = i + field_len + 1;
+                if(i > 31)break;
+            }
+
+            String scanSummary = "";
+            if(devName != null) scanSummary = "\nDevice name: " + devName;
+            if(devAddr != null) scanSummary = scanSummary + "\nAddress: " + devAddr;
+            if(txPower != MIN_VALUE) scanSummary = scanSummary + "\nTXPower: " + txPower;
+            if(advFlags != -1) scanSummary = scanSummary + "\nAdv flags: " + advFlags;
+            scanSummary = scanSummary + "\nRSSI: " + rssi;
+            if(appData != "")scanSummary = scanSummary + "\nAppData: " + appData;
+            //if(rawBytesString != "")scanSummary = scanSummary + "\nrawBytes: " + rawBytesString;
+
+
+            /*String s= byteArrayToHex(result.getScanRecord().getBytes());
+
 
             if(result.getScanRecord().getServiceData()==null) s= "null";
             else {
@@ -119,9 +218,12 @@ public class MainActivity extends AppCompatActivity {
                         press = (float) raw_press / 100;
                     }
                 }
-            }
+            }*/
 
-            peripheralTextView.append(s+"\n"+"Device Name: " + result.getDevice().getName() + " rssi: " + result.getRssi()+"\n"+ "temp: "+temp+", press: "+press+"\n");
+            if(service_data_rcvd && (tsDiff > 200 || tsDiff == 0)) //maggiore di 200 da eliminare in futuro
+                peripheralTextView.append("\n[" + tsDiff + "ms]" + scanSummary + "\n");
+
+            //peripheralTextView.append(s+"\n"+"Device Name: " + result.getDevice().getName() + " rssi: " + result.getRssi()+"\n"+ "temp: "+temp+", press: "+press+"\n");
            // peripheralTextView.append(s+"\n");
             // auto scroll for text view
             final int scrollAmount = peripheralTextView.getLayout().getLineTop(peripheralTextView.getLineCount()) - peripheralTextView.getHeight();
